@@ -1,0 +1,109 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 240 4.9% 83.9%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+
+  .glass-card {
+    @apply bg-white/90 backdrop-blur-lg border border-gray-200 shadow-lg rounded-lg;
+  }
+
+  .dark .glass-card {
+    @apply bg-gray-800/90 backdrop-blur-lg border border-gray-700 shadow-lg rounded-lg;
+  }
+
+  .fade-in {
+    @apply animate-fadeIn;
+  }
+
+  .premium-button {
+    @apply px-6 py-3 bg-black text-white rounded-full font-medium 
+           transition-all duration-300 ease-in-out transform hover:scale-105 
+           hover:shadow-lg active:scale-95;
+  }
+
+  .dark .premium-button {
+    @apply bg-white text-black;
+  }
+
+  .status-badge {
+    @apply px-3 py-1 rounded-full text-sm font-medium;
+  }
+
+  .status-pending {
+    @apply bg-status-pending/10 text-status-pending;
+  }
+
+  .dark .status-pending {
+    @apply bg-status-pending/20 text-status-pending;
+  }
+
+  .status-approved {
+    @apply bg-status-approved/10 text-status-approved;
+  }
+
+  .dark .status-approved {
+    @apply bg-status-approved/20 text-status-approved;
+  }
+
+  .status-denied {
+    @apply bg-status-denied/10 text-status-denied;
+  }
+
+  .dark .status-denied {
+    @apply bg-status-denied/20 text-status-denied;
+  }
+}
