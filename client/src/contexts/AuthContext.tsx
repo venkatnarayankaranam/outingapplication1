@@ -1,4 +1,3 @@
-
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { toast } from 'sonner';
 
@@ -58,18 +57,31 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     }
   }, []);
 
-  const login = (email: string, role: string, details?: any) => {
-    localStorage.setItem('userEmail', email);
-    localStorage.setItem('userRole', role);
-    
-    if (details) {
-      localStorage.setItem('userDetails', JSON.stringify(details));
-      setUserDetails(details);
+  const login = async (email: string, role: string, details?: any) => {
+    try {
+      console.log('[AuthContext] Login called:', { email, role });
+      console.log('[AuthContext] User data:', details);
+      
+      localStorage.setItem('userEmail', email);
+      localStorage.setItem('userRole', role);
+      
+      if (details) {
+        localStorage.setItem('userDetails', JSON.stringify(details));
+        setUserDetails(details);
+      }
+      
+      setIsAuthenticated(true);
+      setUserRole(role);
+      setUserEmail(email);
+
+      console.log('[AuthContext] Login successful, state updated:', {
+        isAuthenticated: true,
+        userDetails: details || { email, role }
+      });
+    } catch (error) {
+      console.error('[AuthContext] Login error:', error);
+      throw error;
     }
-    
-    setIsAuthenticated(true);
-    setUserRole(role);
-    setUserEmail(email);
   };
 
   const logout = () => {

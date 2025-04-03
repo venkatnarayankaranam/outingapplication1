@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { io } from "socket.io-client";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -7,20 +7,21 @@ import { Button } from "@/components/ui/button";
 import { Clock, CheckCircle, XCircle, UserPlus, Home, RefreshCw } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
-import axiosInstance from "@/lib/axios";  // Update import path
+import axiosInstance from "@/lib/axios";  // Fixed import
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogClose } from "@/components/ui/dialog";
 import { PDFDownloadLink } from '@react-pdf/renderer';
 import { ApprovedStudentsPDF } from '@/components/ApprovedStudentsPDF';
+import { Student, OutingRequest, Stats } from "@/types/outing";
 
 const FloorInchargeDashboard = () => {
   const { theme } = useTheme();
   const { userDetails, isAuthenticated, logout } = useAuth();
   const navigate = useNavigate();
-  const [requests, setRequests] = useState([]);
-  const [pendingRequests, setPendingRequests] = useState([]);
-  const [students, setStudents] = useState([]);
-  const [stats, setStats] = useState({
+  const [requests, setRequests] = useState<OutingRequest[]>([]);
+  const [pendingRequests, setPendingRequests] = useState<OutingRequest[]>([]);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [stats, setStats] = useState<Stats>({
     totalStudents: 0,
     pending: 0,
     approved: 0,
@@ -28,14 +29,13 @@ const FloorInchargeDashboard = () => {
   });
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedStudent, setSelectedStudent] = useState(null);
+  const [selectedStudent, setSelectedStudent] = useState<OutingRequest | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(15000); // 15 seconds
   const [isStudentsModalOpen, setIsStudentsModalOpen] = useState(false);
-  const [approvedStudents, setApprovedStudents] = useState([]);
+  const [approvedStudents, setApprovedStudents] = useState<Student[]>([]);
   const [isApprovedModalOpen, setIsApprovedModalOpen] = useState(false);
 
-  // Enhanced fetch function with error handling and logging
   const fetchData = async () => {
     try {
       setRefreshing(true);
@@ -52,12 +52,10 @@ const FloorInchargeDashboard = () => {
         students: studentsResponse.data
       });
 
-      // Process students data
       if (studentsResponse.data?.success) {
         const fetchedStudents = studentsResponse.data.students || [];
         setStudents(fetchedStudents);
         
-        // Update total students count from both sources
         const totalFromStudents = fetchedStudents.length;
         const totalFromRequests = requestsResponse.data.stats?.totalStudents || 0;
         
@@ -70,7 +68,6 @@ const FloorInchargeDashboard = () => {
         toast.error(studentsResponse.data?.message || 'Failed to fetch students');
       }
 
-      // Process requests data
       if (requestsResponse.data?.success) {
         const transformedRequests = requestsResponse.data.requests?.map((req: any) => ({
           id: req._id,
@@ -95,13 +92,11 @@ const FloorInchargeDashboard = () => {
         const pending = transformedRequests.filter((req: any) => req.status === 'pending');
         setPendingRequests(pending);
 
-        // Update stats with the most recent data
         setStats(prev => ({
           ...prev,
           pending: requestsResponse.data.stats?.pending || pending.length,
           approved: requestsResponse.data.stats?.approved || 0,
           denied: requestsResponse.data.stats?.denied || 0,
-          // totalStudents remains from students response
         }));
       } else {
         console.error('Requests response error:', requestsResponse.data);
@@ -120,14 +115,12 @@ const FloorInchargeDashboard = () => {
       }
       toast.error(error.response?.data?.message || "Failed to load dashboard data");
       
-      // Exponential backoff for refresh interval on errors
       setRefreshInterval(prev => Math.min(prev * 2, 120000)); // Max 2 minutes
     } finally {
       setRefreshing(false);
     }
   };
 
-  // Real-time data fetching with interval
   useEffect(() => {
     if (!isAuthenticated || !userDetails?.email) {
       navigate('/login');
@@ -138,7 +131,7 @@ const FloorInchargeDashboard = () => {
     let intervalId: NodeJS.Timeout;
 
     const setupInterval = () => {
-      fetchData(); // Initial fetch
+      fetchData();
       intervalId = setInterval(() => {
         if (isMounted) fetchData();
       }, refreshInterval);
@@ -152,119 +145,39 @@ const FloorInchargeDashboard = () => {
     };
   }, [userDetails?.email, isAuthenticated, navigate, refreshInterval]);
 
-  // Socket.io connection and event handling
   useEffect(() => {
     if (!isAuthenticated || !userDetails?.email) return;
 
     const socket = io(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/floor-incharge`, {
       withCredentials: true,
-      transports: ['websocket', 'polling'],
-      auth: {
-        token: localStorage.getItem('token')
-      }
+      autoConnect: true,
+      reconnection: true,
+      transports: ['websocket', 'polling']
     });
 
     socket.on('connect', () => {
-      console.log('Connected to Floor Incharge namespace');
+      console.log('Connected to Floor Incharge namespace', socket.id);
       
       if (userDetails.assignedBlock && userDetails.assignedFloor) {
         socket.emit('join-floor', {
           hostelBlock: userDetails.assignedBlock,
           floor: userDetails.assignedFloor
         });
-      } else {
-        console.error('Missing block or floor assignment:', userDetails);
       }
     });
 
     socket.on('connect_error', (error) => {
       console.error('Socket connection error:', error);
-    });
-
-    // Handle new requests
-    socket.on('new-request', (data) => {
-      if (data.type === 'new-request') {
-        console.log('New request received:', data);
-        
-        setRequests(prev => {
-          const newRequest = {
-            id: data.request.id,
-            name: data.request.studentName,
-            rollNumber: data.request.rollNumber,
-            date: new Date(data.request.outingDate).toLocaleDateString(),
-            outTime: data.request.outingTime,
-            inTime: data.request.returnTime,
-            purpose: data.request.purpose,
-            status: data.request.status,
-            floor: data.request.floor,
-            hostelBlock: data.request.hostelBlock
-          };
-          
-          // Add new request only if it doesn't exist
-          if (!prev.find(r => r.id === data.request.id)) {
-            return [newRequest, ...prev];
-          }
-          return prev;
-        });
-
-        setPendingRequests(prev => [
-          ...prev.filter(r => r.id !== data.request.id),
-          {
-            id: data.request.id,
-            name: data.request.studentName,
-            rollNumber: data.request.rollNumber,
-            date: new Date(data.request.outingDate).toLocaleDateString(),
-            outTime: data.request.outingTime,
-            inTime: data.request.returnTime,
-            purpose: data.request.purpose,
-            status: 'pending',
-            floor: data.request.floor,
-            hostelBlock: data.request.hostelBlock
-          }
-        ]);
-
-        setStats(prev => ({
-          ...prev,
-          pending: prev.pending + 1
-        }));
-
-        toast.info(`New request from ${data.request.studentName}`);
-      }
-    });
-
-    // Handle request updates
-    socket.on('request-update', (data) => {
-      if (data.type === 'status-change') {
-        console.log('Request status update received:', data);
-        
-        setRequests(prev => 
-          prev.map(request => 
-            request.id === data.request.id 
-              ? { ...request, status: data.request.status }
-              : request
-          )
-        );
-
-        setPendingRequests(prev => 
-          prev.filter(request => request.id !== data.request.id)
-        );
-
-        setStats(prev => {
-          const stats = { ...prev };
-          stats.pending--;
-          if (data.request.status === 'approved') stats.approved++;
-          if (data.request.status === 'denied') stats.denied++;
-          return stats;
-        });
-      }
+      setTimeout(() => {
+        socket.connect();
+      }, 5000);
     });
 
     return () => {
       socket.disconnect();
     };
-  }, [userDetails?.email, isAuthenticated, userDetails?.assignedBlock, userDetails?.assignedFloor]);
+  }, [isAuthenticated, userDetails]);
 
-  // Optimistic updates for request actions
   const handleRequestAction = async (requestId: string, action: 'approve' | 'deny') => {
     setLoading(true);
     const originalRequests = [...requests];
@@ -288,7 +201,6 @@ const FloorInchargeDashboard = () => {
 
       toast.success(`Request ${action}d successfully`);
       
-      // Refresh data after successful action
       await fetchData();
 
     } catch (error: any) {
@@ -299,12 +211,10 @@ const FloorInchargeDashboard = () => {
         action
       });
       
-      // Revert to original state
       setRequests(originalRequests);
       setPendingRequests(originalPending);
       setStats(originalStats);
 
-      // Handle specific error cases
       if (error.response?.status === 401) {
         toast.error('Your session has expired. Please log in again.');
         logout();
@@ -321,13 +231,13 @@ const FloorInchargeDashboard = () => {
     }
   };
 
-  const handleViewDetails = (request: any) => {
+  const handleViewDetails = (request: OutingRequest) => {
     setSelectedStudent(request);
     setIsModalOpen(true);
   };
 
   const handleManualRefresh = () => {
-    setRefreshInterval(15000); // Reset to normal refresh rate
+    setRefreshInterval(15000);
     fetchData();
   };
 
@@ -337,6 +247,17 @@ const FloorInchargeDashboard = () => {
 
   const handleApprovedClick = () => {
     setIsApprovedModalOpen(true);
+  };
+
+  const handleApprovedStudentsData = (students: Student[]) => {
+    return students.map(student => ({
+      name: student.name || 'N/A',
+      rollNumber: student.rollNumber || 'N/A',
+      floor: Array.isArray(student.floor) ? student.floor.join(', ') : (student.floor || 'N/A'),
+      roomNumber: student.roomNumber || 'N/A',
+      outTime: student.outTime || 'N/A',
+      inTime: student.inTime || 'N/A'
+    }));
   };
 
   if (!isAuthenticated) {
@@ -364,7 +285,6 @@ const FloorInchargeDashboard = () => {
           </Button>
         </div>
 
-        {/* Stats Cards with real-time data */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
           <Card 
             className={`p-6 ${theme === 'dark' ? 'bg-gray-800/90 border-gray-700' : 'glass-card'} cursor-pointer transition-all hover:scale-105`}
@@ -421,7 +341,6 @@ const FloorInchargeDashboard = () => {
           </Card>
         </div>
 
-        {/* Pending Requests Table */}
         <Card className={`${theme === 'dark' ? 'bg-gray-800/90 border-gray-700' : 'glass-card'}`}>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -447,7 +366,7 @@ const FloorInchargeDashboard = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {pendingRequests.map((request: any) => (
+                    {pendingRequests.map((request: OutingRequest) => (
                       <tr key={request.id} className={`border-b ${theme === 'dark' ? 'border-gray-700' : 'border-gray-200'}`}>
                         <td className="py-3">{request.name}</td>
                         <td className="py-3">{request.rollNumber}</td>
@@ -510,7 +429,6 @@ const FloorInchargeDashboard = () => {
           </CardContent>
         </Card>
 
-        {/* All Requests Table */}
         <Card className={`${theme === 'dark' ? 'bg-gray-800/90 border-gray-700' : 'glass-card'}`}>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -536,7 +454,7 @@ const FloorInchargeDashboard = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {requests.map((request: any) => (
+                    {requests.map((request: OutingRequest) => (
                       <tr key={request.id} className={`border-b ${theme === 'dark' ? 'border-gray-700' : 'border-gray-200'}`}>
                         <td className="py-3">{request.name}</td>
                         <td className="py-3">{request.rollNumber}</td>
@@ -603,7 +521,6 @@ const FloorInchargeDashboard = () => {
           </CardContent>
         </Card>
 
-        {/* Students Table */}
         <Card className={`mt-8 ${theme === 'dark' ? 'bg-gray-800/90 border-gray-700' : 'glass-card'}`}>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -629,7 +546,7 @@ const FloorInchargeDashboard = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {students.map((student: any) => (
+                    {students.map((student: Student) => (
                       <tr key={student._id} className={`border-b ${theme === 'dark' ? 'border-gray-700' : 'border-gray-200'}`}>
                         <td className="py-3">{student.name || 'N/A'}</td>
                         <td className="py-3">{student.rollNumber || 'N/A'}</td>
@@ -655,7 +572,6 @@ const FloorInchargeDashboard = () => {
           </CardContent>
         </Card>
 
-        {/* Student Details Modal */}
         {selectedStudent && (
           <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
             <DialogContent className={theme === 'dark' ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-black'}>
@@ -731,7 +647,6 @@ const FloorInchargeDashboard = () => {
           </Dialog>
         )}
 
-        {/* Add this new Students Modal */}
         <Dialog open={isStudentsModalOpen} onOpenChange={setIsStudentsModalOpen}>
           <DialogContent className={`${theme === 'dark' ? 'bg-gray-800 text-white border-gray-700' : 'bg-white'} max-w-6xl w-full`}>
             <DialogHeader>
@@ -756,7 +671,7 @@ const FloorInchargeDashboard = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {students.map((student: any) => (
+                  {students.map((student: Student) => (
                     <tr key={student._id} className={`border-b ${theme === 'dark' ? 'border-gray-700' : 'border-gray-200'}`}>
                       <td className="py-3">{student.name || 'N/A'}</td>
                       <td className="py-3">{student.rollNumber || 'N/A'}</td>
@@ -780,7 +695,6 @@ const FloorInchargeDashboard = () => {
           </DialogContent>
         </Dialog>
 
-        {/* Approved Students Modal */}
         <Dialog open={isApprovedModalOpen} onOpenChange={setIsApprovedModalOpen}>
           <DialogContent className={`${theme === 'dark' ? 'bg-gray-800 text-white border-gray-700' : 'bg-white'} max-w-7xl w-full`}>
             <DialogHeader className="flex flex-row items-center justify-between">
@@ -789,7 +703,7 @@ const FloorInchargeDashboard = () => {
                 <span>Approved Outing Students ({approvedStudents.length})</span>
               </DialogTitle>
               <PDFDownloadLink
-                document={<ApprovedStudentsPDF students={approvedStudents} />}
+                document={<ApprovedStudentsPDF students={handleApprovedStudentsData(approvedStudents)} />}
                 fileName={`approved-students-${new Date().toISOString().split('T')[0]}.pdf`}
               >
                 {({ loading }) => (

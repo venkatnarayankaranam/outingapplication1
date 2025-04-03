@@ -1,4 +1,3 @@
-
 import { useState } from 'react';
 import { QrReader } from 'react-qr-reader';
 import { toast } from 'sonner';
@@ -16,20 +15,18 @@ const QRScanner = ({ onScan, onError }: QRScannerProps = {}) => {
     if (data) {
       setScanResult(data);
       try {
-        const requestData = JSON.parse(data);
-        toast.success(`Verified: ${requestData.studentName} - ${requestData.rollNumber}`);
+        const parsedData = JSON.parse(data);
+        if (!parsedData.requestId || !parsedData.name) {
+          throw new Error('Invalid QR code format');
+        }
         // Call the external onScan handler if provided
         if (onScan) onScan(data);
       } catch (error) {
-        toast.error('Invalid QR Code');
+        console.error('QR scan error:', error);
+        toast.error('Invalid QR Code format');
+        if (onError) onError(error as Error);
       }
     }
-  };
-
-  const handleError = (error: Error) => {
-    toast.error('Error scanning QR code: ' + error.message);
-    // Call the external onError handler if provided
-    if (onError) onError(error);
   };
 
   return (
@@ -42,7 +39,11 @@ const QRScanner = ({ onScan, onError }: QRScannerProps = {}) => {
               handleScan(result.getText());
             }
           }}
-          constraints={{ facingMode: 'environment' }}
+          constraints={{ 
+            facingMode: 'environment',
+            aspectRatio: 1
+          }}
+          videoStyle={{ width: '100%', height: '100%' }}
         />
       </div>
       {scanResult && (
