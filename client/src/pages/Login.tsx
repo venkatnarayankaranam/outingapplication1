@@ -9,7 +9,8 @@ import { Lock, Mail, Moon, Sun, User, ArrowLeft, Phone, CheckCircle, Home, BookO
 import { toast } from "sonner";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
-import axios from "axios";
+import { normalizeRole, getDashboardPath } from "@/utils/security";
+import axiosInstance from "@/utils/axiosInstance";
 
 // Admin credentials mapping for fallback
 const ADMIN_CREDENTIALS = {
@@ -31,8 +32,8 @@ const ADMIN_CREDENTIALS = {
   }
 };
 
-// API URL from environment variable or default fallback
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
+// Backend URL
+const backendUrl = "http://localhost:5000/api";
 
 // Floor options
 const FLOOR_OPTIONS = [
@@ -74,7 +75,7 @@ const SEMESTER_OPTIONS = [
 const Login = () => {
   const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
-  const { login, isAuthenticated, userRole } = useAuth();
+  const { login, isAuthenticated, userRole, userDetails } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -95,16 +96,27 @@ const Login = () => {
 
   // Check if user is already logged in
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token && isAuthenticated && userRole) {
-      navigate(`/dashboard/${userRole}`);
+    const currentPath = window.location.pathname;
+    console.log('[Login] Auth check:', {
+      isAuthenticated,
+      userRole,
+      currentPath,
+      hasToken: !!localStorage.getItem('token'),
+      userDetails // Log userDetails to verify it's available
+    });
+
+    // Only redirect if on login page and authenticated
+    if (isAuthenticated && userRole && currentPath === '/login') {
+      const dashboardPath = `/dashboard/${userRole.replace('security', 'gate')}`; // Handle security/gate role mapping
+      console.log('[Login] Redirecting to:', dashboardPath);
+      navigate(dashboardPath, { replace: true });
     }
-  }, [isAuthenticated, userRole, navigate]);
+  }, [isAuthenticated, userRole, userDetails]); // Add userDetails to dependencies
 
   const authenticateWithBackend = async (email: string, password: string) => {
     try {
       setConnectionError(false);
-      const response = await axios.post(`${API_BASE_URL}/auth/login`, {
+      const response = await axiosInstance.post('/auth/login', {
         email,
         password
       });
@@ -155,7 +167,7 @@ const Login = () => {
     }
 
     try {
-      const response = await axios.post(`${API_BASE_URL}/auth/register`, {
+      const response = await axiosInstance.post('/auth/register', {
         email,
         password,
         name,
@@ -198,14 +210,17 @@ const Login = () => {
       const backendAuth = await authenticateWithBackend(email, password);
       
       if (backendAuth.success && backendAuth.userData) {
-        // Save token first
         if (backendAuth.token) {
           localStorage.setItem('token', backendAuth.token);
         }
-        // Then update auth context
-        login(email, backendAuth.userData.role, backendAuth.userData);
+        
+        const normalizedRole = normalizeRole(backendAuth.userData.role);
+        await login(email, normalizedRole, backendAuth.userData);
         toast.success(`Welcome back, ${backendAuth.userData.name || email}`);
-        navigate(`/dashboard/${backendAuth.userData.role}`);
+        
+        const dashboardPath = getDashboardPath(normalizedRole);
+        console.log('[Login] Navigating to:', dashboardPath);
+        navigate(dashboardPath, { replace: true });
         return;
       }
       
@@ -215,12 +230,12 @@ const Login = () => {
           const adminInfo = ADMIN_CREDENTIALS[email as keyof typeof ADMIN_CREDENTIALS];
           
           if (password === adminInfo.password) {
-            // Create a mock token for admin users
             const mockToken = btoa(`admin:${email}`);
             localStorage.setItem('token', mockToken);
-            login(email, adminInfo.role);
-            toast.success(`Welcome, ${adminInfo.role.replace('-', ' ')}`);
-            navigate(`/dashboard/${adminInfo.role}`);
+            const normalizedRole = normalizeRole(adminInfo.role);
+            await login(email, normalizedRole);
+            toast.success(`Welcome, ${normalizedRole.replace('-', ' ')}`);
+            navigate(getDashboardPath(normalizedRole), { replace: true });
             return;
           }
         }
@@ -228,7 +243,7 @@ const Login = () => {
       
       toast.error(backendAuth.message || "Invalid login credentials");
     } catch (error) {
-      console.error("Login error:", error);
+      console.error('[Login] Error:', error);
       toast.error("Login failed. Please try again.");
     } finally {
       setLoading(false);

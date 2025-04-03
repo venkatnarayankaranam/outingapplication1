@@ -34,49 +34,54 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userDetails, setUserDetails] = useState<any | null>(null);
 
-  // Check if user is already logged in
+  // Add immediate auth check on mount
   useEffect(() => {
+    const token = localStorage.getItem('token');
     const storedRole = localStorage.getItem('userRole');
     const storedEmail = localStorage.getItem('userEmail');
-    const storedDetails = localStorage.getItem('userDetails');
     
-    if (storedRole) {
+    console.log('[AuthContext] Initial auth check:', {
+      hasToken: !!token,
+      storedRole,
+      storedEmail
+    });
+
+    if (token && storedRole && storedEmail) {
       setIsAuthenticated(true);
       setUserRole(storedRole);
       setUserEmail(storedEmail);
       
-      if (storedDetails) {
-        try {
+      try {
+        const storedDetails = localStorage.getItem('userDetails');
+        if (storedDetails) {
           setUserDetails(JSON.parse(storedDetails));
-        } catch (error) {
-          console.error('Error parsing user details:', error);
-          // If there's an error parsing, clear the corrupted data
-          localStorage.removeItem('userDetails');
         }
+      } catch (error) {
+        console.error('[AuthContext] Error parsing stored details:', error);
       }
     }
   }, []);
 
   const login = async (email: string, role: string, details?: any) => {
     try {
-      console.log('[AuthContext] Login called:', { email, role });
-      console.log('[AuthContext] User data:', details);
+      console.log('[AuthContext] Login called:', { email, role, details });
       
+      // Set localStorage items first
       localStorage.setItem('userEmail', email);
       localStorage.setItem('userRole', role);
+      localStorage.setItem('userDetails', JSON.stringify(details));
       
-      if (details) {
-        localStorage.setItem('userDetails', JSON.stringify(details));
-        setUserDetails(details);
-      }
-      
+      // Then update state
       setIsAuthenticated(true);
       setUserRole(role);
       setUserEmail(email);
+      setUserDetails(details);
 
-      console.log('[AuthContext] Login successful, state updated:', {
+      console.log('[AuthContext] State updated:', {
         isAuthenticated: true,
-        userDetails: details || { email, role }
+        role,
+        email,
+        details
       });
     } catch (error) {
       console.error('[AuthContext] Login error:', error);

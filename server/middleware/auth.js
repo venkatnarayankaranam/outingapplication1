@@ -107,13 +107,39 @@ const auth = async (req, res, next) => {
 
 const checkRole = (roles) => {
   return (req, res, next) => {
-    if (!roles.includes(req.user.role) && !roles.includes(req.user.role.replace('-', ''))) {
-      return res.status(403).json({
+    try {
+      const userRole = req.user.role.toLowerCase();
+      const normalizedRoles = roles.map(role => role.toLowerCase());
+      
+      // Handle gate/security role mapping
+      if (userRole === 'gate' && normalizedRoles.includes('security')) {
+        return next();
+      }
+      
+      if (!normalizedRoles.includes(userRole)) {
+        console.error('Access denied:', {
+          userRole,
+          allowedRoles: roles,
+          path: req.path
+        });
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied',
+          details: {
+            userRole,
+            requiredRoles: roles,
+            path: req.path
+          }
+        });
+      }
+      next();
+    } catch (error) {
+      console.error('Role check error:', error);
+      res.status(500).json({
         success: false,
-        message: 'Access denied',
+        message: 'Role verification failed'
       });
     }
-    next();
   };
 };
 

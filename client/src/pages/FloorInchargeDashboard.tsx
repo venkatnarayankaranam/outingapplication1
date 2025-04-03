@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogClose } from "@
 import { PDFDownloadLink } from '@react-pdf/renderer';
 import { ApprovedStudentsPDF } from '@/components/ApprovedStudentsPDF';
 import { Student, OutingRequest, Stats } from "@/types/outing";
+import { debugSocket } from '@/utils/socketDebug';
 
 const FloorInchargeDashboard = () => {
   const { theme } = useTheme();
@@ -148,35 +149,35 @@ const FloorInchargeDashboard = () => {
   useEffect(() => {
     if (!isAuthenticated || !userDetails?.email) return;
 
-    const socket = io(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/floor-incharge`, {
-      withCredentials: true,
-      autoConnect: true,
+    const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+    console.log('[Socket] Connecting to:', SOCKET_URL);
+
+    const socket = io(`${SOCKET_URL}/floor-incharge`, {
+      auth: {
+        token: localStorage.getItem('token')
+      },
+      path: '/socket.io', // Explicitly set socket path
       reconnection: true,
-      transports: ['websocket', 'polling']
+      reconnectionAttempts: 5,
+      reconnectionDelay: 3000
     });
 
+    debugSocket(socket); // Use our debug utility
+
+    // Handle room joining after successful connection
     socket.on('connect', () => {
-      console.log('Connected to Floor Incharge namespace', socket.id);
-      
       if (userDetails.assignedBlock && userDetails.assignedFloor) {
-        socket.emit('join-floor', {
-          hostelBlock: userDetails.assignedBlock,
-          floor: userDetails.assignedFloor
-        });
+        const room = `${userDetails.assignedBlock}-${userDetails.assignedFloor}`;
+        console.log('[Socket] Joining room:', room);
+        socket.emit('join-room', { room });
       }
     });
 
-    socket.on('connect_error', (error) => {
-      console.error('Socket connection error:', error);
-      setTimeout(() => {
-        socket.connect();
-      }, 5000);
-    });
-
     return () => {
+      console.log('[Socket] Cleaning up connection');
       socket.disconnect();
     };
-  }, [isAuthenticated, userDetails]);
+  }, [isAuthenticated, userDetails?.email]); // Only re-run if auth state changes
 
   const handleRequestAction = async (requestId: string, action: 'approve' | 'deny') => {
     setLoading(true);

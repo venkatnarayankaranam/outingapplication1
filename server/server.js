@@ -10,23 +10,71 @@ const app = express();
 const server = http.createServer(app);
 const io = socketConfig.init(server);
 
-mongoose
-  .connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/outing-db')
-  .then(() => console.log('Connected to MongoDB'))
-  .catch((err) => console.error('MongoDB connection error:', err));
+const connectWithRetry = (retries = 5, delay = 5000) => {
+  if (!process.env.MONGODB_URI) {
+    console.error('❌ MONGODB_URI is not defined in environment variables');
+    process.exit(1);
+  }
 
+  mongoose
+    .connect(process.env.MONGODB_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+      serverSelectionTimeoutMS: 10000, // Increased timeout
+      socketTimeoutMS: 45000,
+      retryWrites: true,
+      w: 'majority'
+    })
+    .then(async () => {
+      console.log('🚀 Connected to MongoDB Atlas');
+      console.log('Database:', mongoose.connection.name);
+      
+      // Verify collections exist
+      const collections = await mongoose.connection.db.listCollections().toArray();
+      console.log('Available collections:', collections.map(c => c.name));
+      
+      // Verify user exists
+      const usersCollection = mongoose.connection.db.collection('users');
+      const floorIncharge = await usersCollection.findOne({ email: 'floorincharge@kietgroup.com' });
+      console.log('Floor Incharge exists:', !!floorIncharge);
+      
+      // Monitor database connection
+      mongoose.connection.on('disconnected', () => {
+        console.log('❌ Lost MongoDB connection');
+        connectWithRetry();
+      });
+      
+      mongoose.connection.on('error', (err) => {
+        console.error('MongoDB error:', err);
+      });
+    })
+    .catch((err) => {
+      console.error('❌ MongoDB Atlas connection error:', err.message);
+      if (retries > 0) {
+        console.log(`Retrying connection in ${delay / 1000} seconds... (${retries} attempts remaining)`);
+        setTimeout(() => connectWithRetry(retries - 1, delay), delay);
+      } else {
+        console.error('Failed to connect to MongoDB Atlas after multiple attempts');
+        process.exit(1);
+      }
+    });
+};
+
+connectWithRetry();
+
+// Update CORS configuration
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:3000', 'http://localhost:8080'],
+  origin: ['http://localhost:5173'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-  maxAge: 86400,
+  credentials: true
 }));
 
 app.use(express.json());
 
+// Add request logging middleware
 app.use((req, res, next) => {
-  console.log(`Incoming request: ${req.method} ${req.originalUrl}`);
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
   next();
 });
 
@@ -40,6 +88,15 @@ app.use((req, res, next) => {
   next();
 });
 
+// Add request debugging middleware
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+  console.log('Query params:', req.query);
+  console.log('Request body:', req.body);
+  console.log('MongoDB connection state:', mongoose.connection.readyState);
+  next();
+});
+
 // Import routes
 const outingRoutes = require('./routes/outings');
 const userRoutes = require('./routes/users');
@@ -50,6 +107,7 @@ app.use('/api/outings', outingRoutes);
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/users', userRoutes);
 
+// Add error handling for 404s
 app.use((req, res) => {
   const requestPath = `${req.method} ${req.originalUrl}`;
   console.log(`404 - Route not found: ${requestPath}`);

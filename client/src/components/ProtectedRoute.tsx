@@ -1,31 +1,28 @@
-
-import { ReactNode, useEffect } from "react";
-import { Navigate } from "react-router-dom";
-import { toast } from "sonner";
-import { useAuth } from "@/contexts/AuthContext";
+import { Navigate } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
+import { normalizeRole } from '@/utils/security';
 
 interface ProtectedRouteProps {
-  children: ReactNode;
+  children: React.ReactNode;
   allowedRoles: string[];
 }
 
 const ProtectedRoute = ({ children, allowedRoles }: ProtectedRouteProps) => {
-  const { userRole, isAuthenticated } = useAuth();
-  
-  useEffect(() => {
-    if (!isAuthenticated) {
-      toast.error("Please login to continue");
-    } else if (userRole && !allowedRoles.includes(userRole)) {
-      toast.error("You don't have permission to access this page");
-    }
-  }, [userRole, allowedRoles, isAuthenticated]);
+  const { isAuthenticated, userRole } = useAuth();
+  const normalizedUserRole = normalizeRole(userRole || '');
+  const normalizedAllowedRoles = allowedRoles.map(role => normalizeRole(role));
 
-  if (!isAuthenticated || !userRole) {
+  if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
 
-  if (!allowedRoles.includes(userRole)) {
-    return <Navigate to={`/dashboard/${userRole}`} replace />;
+  if (!normalizedAllowedRoles.includes(normalizedUserRole)) {
+    console.error('Access denied:', {
+      userRole: normalizedUserRole,
+      allowedRoles: normalizedAllowedRoles,
+      path: window.location.pathname
+    });
+    return <Navigate to="/404" replace />;
   }
 
   return <>{children}</>;

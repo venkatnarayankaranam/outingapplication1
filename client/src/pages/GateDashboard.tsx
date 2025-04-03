@@ -28,7 +28,14 @@ const GateDashboard = () => {
 
   const fetchApprovedOutings = useCallback(async () => {
     try {
-      const response = await axiosInstance.get('/outings/gate/approved-outings');
+      // Add token to request header
+      const token = localStorage.getItem('token');
+      const response = await axiosInstance.get('/outings/gate/approved-outings', {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+
       if (response.data.success) {
         setApprovedOutings(response.data.outings.map((outing: any) => ({
           ...outing,
@@ -37,20 +44,24 @@ const GateDashboard = () => {
             !outing.tracking?.checkIn ? 'checked_out' : 'completed'
         })));
         setStats({
-          totalCheckedIn: response.data.stats.checkedIn,
-          totalCheckedOut: response.data.stats.checkedOut,
-          pendingReturns: response.data.stats.pending
+          totalCheckedIn: response.data.stats.checkedIn || 0,
+          totalCheckedOut: response.data.stats.checkedOut || 0,
+          pendingReturns: response.data.stats.pending || 0
         });
       }
     } catch (error: any) {
       console.error('Error fetching approved outings:', error);
+      if (error.response?.status === 403) {
+        toast.error('Access denied. Please check your permissions.');
+        return;
+      }
       if (error.response?.status === 401) {
-        console.error('Authentication error:', error);
+        navigate('/login');
         return;
       }
       toast.error(error.response?.data?.message || 'Failed to fetch approved outings');
     }
-  }, []);
+  }, [navigate]);
 
   useEffect(() => {
     console.log('[GateDashboard] Mounting component:', {
@@ -59,7 +70,7 @@ const GateDashboard = () => {
       role: userDetails?.role
     });
 
-    if (!isAuthenticated || userDetails?.role !== 'security') {
+    if (!isAuthenticated || (userDetails?.role !== 'security' && userDetails?.role !== 'gate')) {
       console.log('[GateDashboard] Auth check failed, redirecting to login');
       navigate('/login');
       return;
@@ -122,7 +133,7 @@ const GateDashboard = () => {
   };
 
   // Return early if not authenticated
-  if (!isAuthenticated || userDetails?.role !== 'security') {
+  if (!isAuthenticated || (userDetails?.role !== 'security' && userDetails?.role !== 'gate')) {
     return null;
   }
 

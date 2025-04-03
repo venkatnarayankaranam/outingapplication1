@@ -8,6 +8,8 @@ const socketIO = require('../config/socket');
 const workflowController = require('../controllers/outingWorkflowController');
 const PDFDocument = require('pdfkit');
 const { generatePDF } = require('../services/pdfService');
+const QRCode = require('qrcode');
+const { getIO } = require('../config/socket');
 
 // Get students under floor incharge
 router.get('/floor-incharge/students/:email', auth, async (req, res) => {
@@ -181,6 +183,39 @@ router.get('/floor-incharge/approved-students', auth, checkRole(['floor-incharge
     });
   } catch (error) {
     console.error('Error fetching approved students:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Get approved students for warden
+router.get('/approved-students/warden', auth, checkRole(['warden']), async (req, res) => {
+  try {
+    const approvedRequests = await OutingRequest.find({
+      status: 'approved',
+      wardenApproval: 'approved'
+    })
+    .populate('studentId', 'name email rollNumber hostelBlock floor roomNumber phoneNumber parentPhoneNumber branch semester')
+    .sort({ outingDate: -1 });
+
+    const uniqueStudents = Array.from(new Map(
+      approvedRequests.map(request => [
+        request.studentId._id.toString(),
+        {
+          ...request.studentId.toObject(),
+          outingTime: request.outingTime,
+          returnTime: request.returnTime,
+          outingDate: request.outingDate,
+          requestId: request._id
+        }
+      ])
+    ).values());
+
+    res.json({
+      success: true,
+      students: uniqueStudents
+    });
+  } catch (error) {
+    console.error('Error fetching warden approved students:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -518,44 +553,82 @@ router.get('/pending/:level', auth, checkRole(['floor-incharge', 'hostel-incharg
 // QR code verification endpoint
 router.post('/verify-qr', auth, checkRole(['security']), async (req, res) => {
   try {
-    const { qrData, type } = req.body;
-    const data = JSON.parse(qrData);
+    const { qrData } = req.body;
+    const decodedData = JSON.parse(qrData);
     
-    const request = await OutingRequest.findById(data.requestId)
-      .populate('studentId', 'name email rollNumber phoneNumber');
+    const request = await OutingRequest.findById(decodedData.requestId)
+      .populate('studentId', 'name rollNumber phoneNumber parentPhoneNumber branch roomNumber');
 
-    if (!request || request.currentLevel !== 'approved') {
+    if (!request || request.status !== 'approved') {
       return res.status(400).json({
         success: false,
         message: 'Invalid or unauthorized QR code'
       });
     }
 
-    // Handle check-in/check-out
-    if (type === 'outgoing') {
-      request.checkOut = {
+    // Check if student is checking in or out
+    const isCheckingIn = request.tracking.checkOut && !request.tracking.checkIn;
+    
+    if (isCheckingIn) {
+      request.tracking.checkIn = {
         time: new Date(),
-        scannedBy: req.user.id
+        verifiedBy: req.user.id
+      };
+    } else if (!request.tracking.checkOut) {
+      request.tracking.checkOut = {
+        time: new Date(),
+        verifiedBy: req.user.id
       };
     } else {
-      request.checkIn = {
-        time: new Date(),
-        scannedBy: req.user.id
-      };
+      return res.status(400).json({
+        success: false,
+        message: 'Student has already completed the outing cycle'
+      });
     }
 
     await request.save();
 
     res.json({
       success: true,
-      studentDetails: {
+      message: `Student ${isCheckingIn ? 'checked in' : 'checked out'} successfully`,
+      outingDetails: {
         name: request.studentId.name,
         rollNumber: request.studentId.rollNumber,
         phoneNumber: request.studentId.phoneNumber,
-        parentPhoneNumber: request.parentPhoneNumber,
-        outTime: request.outingTime,
-        inTime: request.returnTime
+        parentPhoneNumber: request.studentId.parentPhoneNumber,
+        branch: request.studentId.branch,
+        roomNumber: request.studentId.roomNumber,
+        outingTime: request.outingTime,
+        inTime: request.returnTime,
+        status: request.status,
+        tracking: request.tracking
       }
+    });
+  } catch (error) {
+    console.error('QR verification error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Get QR Code for student
+router.get('/request/:id/qr-code', auth, async (req, res) => {
+  try {
+    const request = await OutingRequest.findOne({
+      _id: req.params.id,
+      studentId: req.user.id,
+      status: 'approved'
+    });
+
+    if (!request || !request.qrCode) {
+      return res.status(404).json({
+        success: false,
+        message: 'QR code not found or request not approved'
+      });
+    }
+
+    res.json({
+      success: true,
+      qrCode: request.qrCode.data
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -695,91 +768,64 @@ router.get('/dashboard/warden', auth, checkRole(['warden']), async (req, res) =>
 });
 
 // Update warden approve endpoint
-router.post('/warden/approve/:requestId', auth, checkRole(['warden']), async (req, res) => {
+router.patch('/warden/approve/:requestId', auth, checkRole(['warden']), async (req, res) => {
   try {
-    const { requestId } = req.params;
+    const request = await OutingRequest.findById(req.params.requestId)
+      .populate('studentId', 'name email rollNumber hostelBlock floor roomNumber');
 
-    // Validate ObjectId
-    if (!requestId || !mongoose.Types.ObjectId.isValid(requestId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid request ID format',
-        details: { providedId: requestId }
-      });
-    }
-
-    const outingRequest = await OutingRequest.findById(requestId)
-      .populate('studentId', 'name email rollNumber');
-
-    if (!outingRequest) {
+    if (!request) {
       return res.status(404).json({
         success: false,
-        message: 'Request not found',
-        details: { requestId }
+        message: 'Request not found'
       });
     }
 
-    // Validate request state
-    if (outingRequest.currentLevel !== 'warden' || outingRequest.hostelInchargeApproval !== 'approved') {
+    // Check current status
+    if (request.wardenApproval === 'approved') {
       return res.status(400).json({
         success: false,
-        message: 'Invalid request state. Must be approved by Hostel Incharge first',
-        currentState: {
-          currentLevel: outingRequest.currentLevel,
-          hostelInchargeApproval: outingRequest.hostelInchargeApproval
-        }
+        message: 'Request is already approved'
       });
     }
 
-    const { remarks = '' } = req.body;
-
-    // Create approval entry
-    const approvalEntry = {
-      level: 'warden',
-      status: 'approved',
-      timestamp: new Date(),
-      remarks,
-      approvedBy: req.user.email,
-      approverModel: 'Admin',
-      approverInfo: {
-        email: req.user.email,
-        role: 'warden'
-      }
+    // Update approval status
+    request.wardenApproval = 'approved';
+    request.status = 'approved';
+    request.currentLevel = 'completed';
+    request.lastModifiedBy = req.user.email;
+    request.approvalTimestamps = {
+      ...request.approvalTimestamps,
+      warden: new Date()
     };
 
-    // Update request
-    outingRequest.approvalFlow.push(approvalEntry);
-    outingRequest.wardenApproval = 'approved';
-    outingRequest.status = 'approved';
-    outingRequest.currentLevel = 'completed';
-    outingRequest.lastModifiedBy = req.user.email;
+    await request.save();
 
-    await outingRequest.save();
-    
-    // Generate QR codes after final approval
-    if (outingRequest.status === 'approved') {
-      await outingRequest.generateQRCodes();
+    // Emit socket event if needed
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('request-approved', {
+        requestId: request._id,
+        status: request.status,
+        level: 'warden'
+      });
     }
 
     res.json({
       success: true,
-      message: 'Request approved by Warden',
+      message: 'Request approved successfully',
       request: {
-        id: outingRequest._id,
-        status: outingRequest.status,
-        currentLevel: outingRequest.currentLevel,
-        studentName: outingRequest.studentId.name,
-        rollNumber: outingRequest.studentId.rollNumber
+        id: request._id,
+        status: request.status,
+        studentName: request.studentId.name,
+        currentLevel: request.currentLevel
       }
     });
+
   } catch (error) {
-    console.error('Warden approval error:', {
-      error: error.message,
-      stack: error.stack
-    });
+    console.error('Warden approval error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to process approval',
+      message: 'Failed to approve request',
       error: error.message
     });
   }
@@ -842,6 +888,431 @@ router.get('/approved-requests/pdf', auth, checkRole(['floor-incharge', 'hostel-
       success: false,
       message: 'Failed to generate PDF',
       error: error.message
+    });
+  }
+});
+
+// Update approval routes
+router.patch('/floor-incharge/request/:id/approve', auth, async (req, res) => {
+  try {
+    const outing = await OutingRequest.findById(req.params.id);
+    if (!outing) return res.status(404).json({ success: false, message: 'Request not found' });
+
+    // Verify current stage
+    if (outing.status !== 'pending_floor_incharge') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid request stage'
+      });
+    }
+
+    // Update approval
+    outing.approvals.floorIncharge = {
+      approved: true,
+      approvedAt: new Date(),
+      approvedBy: req.user.id
+    };
+    
+    // Update status
+    outing.updateApprovalStatus();
+    await outing.save();
+
+    // Emit socket events
+    const io = getIO();
+    io.of('/floor-incharge').emit('request-updated', { 
+      outingId: outing._id, 
+      status: outing.status,
+      approvalStage: outing.approvalStage
+    });
+    io.of('/hostel-incharge').emit('new-request', outing);
+
+    res.json({ 
+      success: true, 
+      message: 'Request approved and forwarded to Hostel Incharge',
+      status: outing.status
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.patch('/hostel-incharge/request/:id/approve', auth, async (req, res) => {
+  try {
+    const outing = await OutingRequest.findById(req.params.id);
+    if (!outing) return res.status(404).json({ success: false, message: 'Request not found' });
+
+    // Verify current stage
+    if (outing.status !== 'pending_hostel_incharge') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid request stage'
+      });
+    }
+
+    // Update approval
+    outing.approvals.hostelIncharge = {
+      approved: true,
+      approvedAt: new Date(),
+      approvedBy: req.user.id
+    };
+    
+    // Update status
+    outing.updateApprovalStatus();
+    await outing.save();
+
+    // Emit socket events
+    const io = getIO();
+    io.of('/hostel-incharge').emit('request-updated', { 
+      outingId: outing._id, 
+      status: outing.status,
+      approvalStage: outing.approvalStage
+    });
+    io.of('/warden').emit('new-request', outing);
+
+    res.json({ 
+      success: true, 
+      message: 'Request approved and forwarded to Warden',
+      status: outing.status
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.patch('/warden/request/:id/approve', auth, async (req, res) => {
+  try {
+    const outing = await OutingRequest.findById(req.params.id);
+    if (!outing) return res.status(404).json({ success: false, message: 'Request not found' });
+
+    // Verify current stage
+    if (outing.status !== 'pending_warden') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid request stage'
+      });
+    }
+
+    // Update approval
+    outing.approvals.warden = {
+      approved: true,
+      approvedAt: new Date(),
+      approvedBy: req.user.id
+    };
+    
+    // Update status and generate QR code only on final approval
+    outing.updateApprovalStatus();
+    
+    if (outing.status === 'approved') {
+      const qrData = {
+        name: outing.studentId.name,
+        rollNumber: outing.studentId.rollNumber,
+        phoneNumber: outing.studentId.phoneNumber,
+        parentPhoneNumber: outing.studentId.parentPhoneNumber,
+        outTime: outing.outingTime,
+        inTime: outing.returnTime,
+        approvedAt: new Date()
+      };
+
+      outing.qrCode = await QRCode.toDataURL(JSON.stringify(qrData));
+    }
+
+    await outing.save();
+
+    // Emit socket events
+    const io = getIO();
+    io.of('/warden').emit('request-updated', { 
+      outingId: outing._id, 
+      status: outing.status,
+      approvalStage: outing.approvalStage
+    });
+    
+    if (outing.status === 'approved') {
+      io.emit('request-approved', outing);
+    }
+
+    res.json({ 
+      success: true, 
+      message: outing.status === 'approved' ? 'Request fully approved' : 'Request updated',
+      status: outing.status,
+      qrCode: outing.qrCode
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Get all approved outings for gate security
+router.get('/approved-outings', auth, checkRole(['security']), async (req, res) => {
+  try {
+    const approvedOutings = await OutingRequest.find({
+      status: 'approved',
+      'approvals.warden.approved': true
+    }).populate('studentId', 'name rollNumber phoneNumber parentPhoneNumber hostelBlock roomNumber')
+      .sort({ outingDate: -1 });
+
+    const transformedOutings = approvedOutings.map(outing => ({
+      id: outing._id,
+      studentName: outing.studentId?.name || 'N/A',
+      rollNumber: outing.studentId?.rollNumber || 'N/A',
+      roomNumber: outing.studentId?.roomNumber || 'N/A',
+      phoneNumber: outing.studentId?.phoneNumber || 'N/A',
+      parentPhoneNumber: outing.studentId?.parentPhoneNumber || 'N/A',
+      outingTime: outing.outingTime,
+      returnTime: outing.returnTime,
+      checkIn: outing.tracking?.checkIn,
+      checkOut: outing.tracking?.checkOut,
+      verificationStatus: !outing.tracking?.checkOut ? 'not_started' :
+        !outing.tracking?.checkIn ? 'checked_out' : 'completed'
+    }));
+
+    // Get statistics
+    const stats = {
+      checkedIn: await OutingRequest.countDocuments({
+        status: 'approved',
+        'tracking.checkIn': { $exists: true }
+      }),
+      checkedOut: await OutingRequest.countDocuments({
+        status: 'approved',
+        'tracking.checkOut': { $exists: true },
+        'tracking.checkIn': { $exists: false }
+      }),
+      pending: await OutingRequest.countDocuments({
+        status: 'approved',
+        'tracking.checkOut': { $exists: false }
+      })
+    };
+
+    res.json({
+      success: true,
+      outings: transformedOutings,
+      stats
+    });
+  } catch (error) {
+    console.error('Error fetching approved outings:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message,
+      error: process.env.NODE_ENV === 'development' ? error : undefined
+    });
+  }
+});
+
+// Add route for gate security check-in/check-out
+router.post('/gate/scan', auth, checkRole(['security']), async (req, res) => {
+  try {
+    const { qrData, scanType } = req.body;
+    const data = JSON.parse(qrData);
+    
+    const request = await OutingRequest.findById(data.requestId)
+      .populate('studentId', 'name email rollNumber phoneNumber hostelBlock roomNumber parentPhoneNumber');
+
+    if (!request || request.status !== 'approved') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or unauthorized QR code'
+      });
+    }
+
+    const now = new Date();
+
+    if (scanType === 'checkout') {
+      if (request.tracking?.checkOut) {
+        return res.status(400).json({
+          success: false,
+          message: 'Student has already checked out'
+        });
+      }
+
+      request.tracking = {
+        ...request.tracking,
+        checkOut: {
+          time: now,
+          verifiedBy: req.user.id
+        }
+      };
+    } else if (scanType === 'checkin') {
+      if (!request.tracking?.checkOut) {
+        return res.status(400).json({
+          success: false,
+          message: 'Student must check out first'
+        });
+      }
+
+      if (request.tracking?.checkIn) {
+        return res.status(400).json({
+          success: false,
+          message: 'Student has already checked in'
+        });
+      }
+
+      request.tracking.checkIn = {
+        time: now,
+        verifiedBy: req.user.id
+      };
+
+      // Check if student is returning late
+      const scheduledReturn = new Date(`${request.returnDate}T${request.returnTime}`);
+      const timeDiff = Math.abs(now.getTime() - scheduledReturn.getTime()) / (1000 * 60); // diff in minutes
+      
+      if (timeDiff > 30) {
+        request.status = 'late-return';
+      }
+    }
+
+    await request.save();
+
+    // Emit socket event
+    socketIO.getIO().emit('gate-scan', {
+      requestId: request._id,
+      type: scanType,
+      studentName: request.studentId.name,
+      rollNumber: request.studentId.rollNumber,
+      timestamp: now
+    });
+
+    res.json({
+      success: true,
+      message: `Successfully ${scanType === 'checkout' ? 'checked out' : 'checked in'} student`,
+      studentDetails: {
+        name: request.studentId.name,
+        rollNumber: request.studentId.rollNumber,
+        hostelBlock: request.studentId.hostelBlock,
+        roomNumber: request.studentId.roomNumber,
+        phoneNumber: request.studentId.phoneNumber,
+        parentPhoneNumber: request.studentId.parentPhoneNumber,
+        outTime: request.outingTime,
+        returnTime: request.returnTime
+      },
+      tracking: request.tracking
+    });
+
+  } catch (error) {
+    console.error('Gate scan error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to process gate scan',
+      error: error.message
+    });
+  }
+});
+
+router.get('/gate/active-outings', auth, checkRole(['security']), async (req, res) => {
+  try {
+    const outings = await OutingRequest.find({
+      status: 'approved',
+      'tracking.checkIn': { $exists: false },
+      outingDate: {
+        $gte: new Date(new Date().setHours(0, 0, 0, 0))
+      }
+    }).populate('studentId', 'name rollNumber hostelBlock roomNumber phoneNumber parentPhoneNumber')
+      .sort({ outingTime: 1 });
+
+    const stats = {
+      checkedOut: await OutingRequest.countDocuments({
+        'tracking.checkOut': { $exists: true },
+        'tracking.checkIn': { $exists: false }
+      }),
+      checkedIn: await OutingRequest.countDocuments({
+        'tracking.checkOut': { $exists: true },
+        'tracking.checkIn': { $exists: true },
+        outingDate: {
+          $gte: new Date(new Date().setHours(0, 0, 0, 0))
+        }
+      }),
+      pendingReturns: await OutingRequest.countDocuments({
+        status: 'approved',
+        'tracking.checkOut': { $exists: true },
+        'tracking.checkIn': { $exists: false },
+        returnDate: { $lt: new Date() }
+      })
+    };
+
+    res.json({
+      success: true,
+      outings: outings.map(o => ({
+        id: o._id,
+        studentName: o.studentId.name,
+        rollNumber: o.studentId.rollNumber,
+        roomNumber: o.studentId.roomNumber,
+        hostelBlock: o.studentId.hostelBlock,
+        outingTime: o.outingTime,
+        returnTime: o.returnTime,
+        phoneNumber: o.studentId.phoneNumber,
+        parentPhoneNumber: o.studentId.parentPhoneNumber,
+        tracking: o.tracking
+      })),
+      stats
+    });
+
+  } catch (error) {
+    console.error('Error fetching active outings:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch active outings',
+      error: error.message
+    });
+  }
+});
+
+// Get all approved outings for gate security
+router.get('/gate/approved-outings', auth, checkRole(['security', 'gate']), async (req, res) => {
+  try {
+    console.log('Fetching approved outings. User role:', req.user.role);
+
+    const approvedOutings = await OutingRequest.find({
+      status: 'approved',
+      currentLevel: 'completed',
+      wardenApproval: 'approved',
+      hostelInchargeApproval: 'approved',
+      floorInchargeApproval: 'approved'
+    })
+    .populate('studentId', 'name rollNumber hostelBlock roomNumber phoneNumber parentPhoneNumber')
+    .sort({ outingDate: -1 });
+
+    const transformedOutings = approvedOutings.map(outing => ({
+      id: outing._id,
+      studentName: outing.studentId?.name || 'N/A',
+      rollNumber: outing.studentId?.rollNumber || 'N/A',
+      hostelBlock: outing.studentId?.hostelBlock || 'N/A',
+      roomNumber: outing.studentId?.roomNumber || 'N/A',
+      phoneNumber: outing.studentId?.phoneNumber || 'N/A',
+      parentPhoneNumber: outing.studentId?.parentPhoneNumber || 'N/A',
+      outingDate: outing.outingDate,
+      outingTime: outing.outingTime,
+      returnTime: outing.returnTime,
+      purpose: outing.purpose,
+      tracking: outing.tracking || {},
+      approvalFlow: outing.approvalFlow || [],
+      verificationStatus: !outing.tracking?.checkOut ? 'not_started' :
+        !outing.tracking?.checkIn ? 'checked_out' : 'completed'
+    }));
+
+    const stats = {
+      checkedIn: await OutingRequest.countDocuments({
+        status: 'approved',
+        'tracking.checkIn': { $exists: true }
+      }),
+      checkedOut: await OutingRequest.countDocuments({
+        status: 'approved',
+        'tracking.checkOut': { $exists: true },
+        'tracking.checkIn': { $exists: false }
+      }),
+      pending: await OutingRequest.countDocuments({
+        status: 'approved',
+        'tracking.checkOut': { $exists: false }
+      })
+    };
+
+    res.json({
+      success: true,
+      outings: transformedOutings,
+      stats
+    });
+  } catch (error) {
+    console.error('Error fetching approved outings:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 });

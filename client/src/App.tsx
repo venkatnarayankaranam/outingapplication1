@@ -1,4 +1,3 @@
-
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -34,6 +33,15 @@ const App = () => (
           <BrowserRouter>
             <Routes>
               <Route path="/login" element={<Login />} />
+              {/* Update security/gate route */}
+              <Route path="/dashboard/security" element={
+                <ProtectedRoute allowedRoles={['security', 'gate']}>
+                  <GateDashboard />
+                </ProtectedRoute>
+              } />
+              <Route path="/dashboard/gate" element={
+                <Navigate to="/dashboard/security" replace />
+              } />
               <Route path="/dashboard/floor-incharge" element={
                 <ProtectedRoute allowedRoles={['floor-incharge']}>
                   <FloorInchargeDashboard />
@@ -47,11 +55,6 @@ const App = () => (
               <Route path="/dashboard/warden" element={
                 <ProtectedRoute allowedRoles={['warden']}>
                   <WardenDashboard />
-                </ProtectedRoute>
-              } />
-              <Route path="/dashboard/gate" element={
-                <ProtectedRoute allowedRoles={['gate']}>
-                  <GateDashboard />
                 </ProtectedRoute>
               } />
               <Route path="/dashboard/student" element={

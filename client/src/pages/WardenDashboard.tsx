@@ -56,9 +56,13 @@ const WardenDashboard = () => {
       if (response.data.success) {
         setApprovedStudents(response.data.students);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching approved students:', error);
-      toast.error('Failed to fetch approved students');
+      if (error.response?.status === 401) {
+        navigate('/login');
+      } else {
+        toast.error(error.response?.data?.message || 'Failed to fetch approved students');
+      }
     }
   };
 
@@ -78,31 +82,22 @@ const WardenDashboard = () => {
 
   const handleApprove = async (requestId: string) => {
     try {
-      if (!requestId) {
-        toast.error('Invalid request ID');
-        return;
-      }
-
-      const response = await axiosInstance.post(`/outings/warden/approve/${requestId}`, {
-        remarks: '',  // Add remarks if needed
-        level: 'warden',
-        status: 'approved'
-      });
+      const response = await axiosInstance.patch(`/outings/warden/approve/${requestId}`);
 
       if (response.data.success) {
         toast.success('Request approved successfully');
-        // Refresh dashboard data
-        const dashboardResponse = await axiosInstance.get('/outings/dashboard/warden');
-        if (dashboardResponse.data.success) {
-          setDashboardData(dashboardResponse.data.data);
-        }
+        await fetchDashboardData();
+        await fetchApprovedStudents();
+      } else {
+        toast.error(response.data.message || 'Failed to approve request');
       }
     } catch (error: any) {
-      console.error('Approval error:', {
-        error: error.response?.data || error.message,
-        requestId
-      });
-      toast.error(error.response?.data?.message || 'Failed to approve request');
+      console.error('Approval error:', { error, requestId });
+      if (error.response?.status === 401) {
+        navigate('/login');
+      } else {
+        toast.error(error.response?.data?.message || 'Failed to approve request');
+      }
     }
   };
 
